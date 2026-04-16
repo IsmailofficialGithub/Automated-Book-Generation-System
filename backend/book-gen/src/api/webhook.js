@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
@@ -10,6 +11,13 @@ import { getChaptersByBookId, approveChapter } from '../db/chaptersRepo.js';
 const uuid = z.string().uuid();
 
 const app = Fastify({ logger: false });
+
+const corsOrigins = env.CORS_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean);
+await app.register(cors, {
+  origin: corsOrigins.length ? corsOrigins : true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+});
 
 app.get('/health', async () => ({
   status: 'ok',

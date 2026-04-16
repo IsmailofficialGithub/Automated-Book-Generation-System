@@ -1,0 +1,243 @@
+{
+  "name": "Book Gen — Sheets + ChatGPT + Supabase (no Redis)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Standalone (no book-gen / no Redis)\n\n**n8n env vars** (Settings → Variables): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`\n\n**Google Sheets**: after import, open **Read Google Sheet** → **Credential** → add **Google Sheets OAuth2**; share the spreadsheet with that Google account.\n\n**Sheet config** node: set `spreadsheetId` (from the URL) + tab name (e.g. `Book_generetor`).\n\n**Header row columns**: `title`, `notes_on_outline_before`, `status_outline_notes`.\n\nFlow: read rows → **POST** `books` → OpenAI outline → **PATCH** `outline`. Each run **inserts** new rows (no title dedup); add a GET+IF in n8n if you need upsert-by-title like the Node app.",
+        "height": 420,
+        "width": 460
+      },
+      "id": "sticky-1",
+      "name": "Read me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-420, 140]
+    },
+    {
+      "parameters": {},
+      "id": "trig-1",
+      "name": "Manual trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "s1",
+              "name": "spreadsheetId",
+              "value": "YOUR_SPREADSHEET_ID_FROM_URL",
+              "type": "string"
+            },
+            {
+              "id": "s2",
+              "name": "sheetName",
+              "value": "Book_generetor",
+              "type": "string"
+            },
+            {
+              "id": "s3",
+              "name": "range",
+              "value": "A1:G200",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-cfg",
+      "name": "Sheet config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $json.spreadsheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $json.sheetName }}",
+          "mode": "name"
+        },
+        "options": {
+          "range": "={{ $json.range }}"
+        }
+      },
+      "id": "gs-read",
+      "name": "Read Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Map sheet columns to book fields (header row: title, notes_on_outline_before, status_outline_notes)\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const title = (j.title ?? j.Title ?? '').toString().trim();\n  if (!title) continue;\n  const notes =\n    j.notes_on_outline_before ??\n    j['notes_on_outline_before'] ??\n    j['Notes on outline before'] ??\n    '';\n  out.push({\n    json: {\n      title,\n      notes_on_outline_before: String(notes),\n      status_outline_notes: String(j.status_outline_notes ?? j['status_outline_notes'] ?? 'no'),\n    },\n  });\n}\nif (!out.length) {\n  throw new Error('No rows with a non-empty title');\n}\nreturn out;"
+      },
+      "id": "code-norm",
+      "name": "Normalize rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL.replace(/\\/$/, '') }}/rest/v1/books",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ title: $json.title, notes_on_outline_before: $json.notes_on_outline_before || null, status_outline_notes: $json.status_outline_notes || 'no' }) }}",
+        "options": {}
+      },
+      "id": "http-insert",
+      "name": "Supabase insert book",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst row = Array.isArray(resp) ? resp[0] : resp;\nif (!row?.id) throw new Error('Supabase insert did not return id');\nreturn [{\n  json: {\n    bookId: row.id,\n    title: row.title,\n    notes_on_outline_before: row.notes_on_outline_before,\n  },\n}];"
+      },
+      "id": "code-book",
+      "name": "Extract book after insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OPENAI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'system', content: 'You are an editorial assistant. Produce a clear book outline in Markdown with numbered chapters and short bullets. Be concise.' }, { role: 'user', content: 'Book title: ' + $json.title + '\\n\\nEditor notes (before outline):\\n' + ($json.notes_on_outline_before || '(none)') }] }) }}",
+        "options": {}
+      },
+      "id": "http-openai",
+      "name": "OpenAI outline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst outline = j.choices?.[0]?.message?.content ?? '';\nif (!outline) throw new Error('OpenAI returned no outline');\nconst bookId = $('Extract book after insert').item.json.bookId;\nreturn [{ json: { bookId, outline } }];"
+      },
+      "id": "code-patch-body",
+      "name": "Prepare PATCH",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL.replace(/\\/$/, '') + '/rest/v1/books?id=eq.' + $json.bookId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ outline: $json.outline }) }}",
+        "options": {}
+      },
+      "id": "http-patch",
+      "name": "Supabase save outline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300]
+    }
+  ],
+  "connections": {
+    "Manual trigger": {
+      "main": [[{ "node": "Sheet config", "type": "main", "index": 0 }]]
+    },
+    "Sheet config": {
+      "main": [[{ "node": "Read Google Sheet", "type": "main", "index": 0 }]]
+    },
+    "Read Google Sheet": {
+      "main": [[{ "node": "Normalize rows", "type": "main", "index": 0 }]]
+    },
+    "Normalize rows": {
+      "main": [[{ "node": "Supabase insert book", "type": "main", "index": 0 }]]
+    },
+    "Supabase insert book": {
+      "main": [[{ "node": "Extract book after insert", "type": "main", "index": 0 }]]
+    },
+    "Extract book after insert": {
+      "main": [[{ "node": "OpenAI outline", "type": "main", "index": 0 }]]
+    },
+    "OpenAI outline": {
+      "main": [[{ "node": "Prepare PATCH", "type": "main", "index": 0 }]]
+    },
+    "Prepare PATCH": {
+      "main": [[{ "node": "Supabase save outline", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": { "templateCredsSetupCompleted": false },
+  "pinData": {}
+}
