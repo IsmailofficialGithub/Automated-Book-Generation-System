@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useToast } from '../context/ToastContext.jsx';
 import { api } from '../lib/api.js';
 
 function statusClass(status) {
@@ -12,24 +13,23 @@ function statusClass(status) {
 }
 
 export default function HomePage() {
+  const toast = useToast();
   const [health, setHealth] = useState(null);
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
-    setError(null);
     try {
       const [h, list] = await Promise.all([api('/health'), api('/books')]);
       setHealth(h);
       setBooks(list.books ?? []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load');
+      toast.error(e instanceof Error ? e.message : 'Failed to load');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     load();
@@ -37,12 +37,14 @@ export default function HomePage() {
 
   async function handleSync() {
     setSyncing(true);
-    setError(null);
     try {
-      await api('/sync-sheet', { method: 'POST' });
+      const result = await api('/sync-sheet', { method: 'POST' });
       await load();
+      const ins = result?.inserted ?? 0;
+      const upd = result?.updated ?? 0;
+      toast.success(`Sheet synced · ${ins} new, ${upd} updated`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sync failed');
+      toast.error(e instanceof Error ? e.message : 'Sync failed');
     } finally {
       setSyncing(false);
     }
@@ -79,15 +81,6 @@ export default function HomePage() {
           </button>
         </div>
       </header>
-
-      {error && (
-        <div
-          className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
-          role="alert"
-        >
-          {error}
-        </div>
-      )}
 
       {loading ? (
         <p className="text-slate-500">Loading…</p>

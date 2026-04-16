@@ -78,14 +78,14 @@ export async function syncSheetToDatabase(supabase) {
       if (insertErr) throw new Error(`sync insert book "${sheetBook.title}": ${insertErr.message}`);
       inserted++;
     } else {
+      // Do not sync final_review_* from the sheet on update — those are edited via the API (or set on insert).
+      // Otherwise every sync/poll overwrites values saved in the Book Studio UI.
       const { error: updateErr } = await supabase
         .from('books')
         .update({
           notes_on_outline_before: sheetBook.notes_on_outline_before,
           notes_on_outline_after: sheetBook.notes_on_outline_after,
           status_outline_notes: sheetBook.status_outline_notes ?? existing.status_outline_notes,
-          final_review_notes_status: sheetBook.final_review_notes_status ?? existing.final_review_notes_status,
-          final_review_notes: sheetBook.final_review_notes,
         })
         .eq('id', existing.id);
       if (updateErr) throw new Error(`sync update book "${sheetBook.title}": ${updateErr.message}`);

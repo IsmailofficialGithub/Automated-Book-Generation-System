@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { useToast } from '../context/ToastContext.jsx';
 import { api } from '../lib/api.js';
 
 function chapterStatusClass(status) {
@@ -10,6 +11,7 @@ function chapterStatusClass(status) {
 }
 
 export default function BookPage() {
+  const toast = useToast();
   const { bookId } = useParams();
   const [health, setHealth] = useState(null);
   const [book, setBook] = useState(null);
@@ -31,11 +33,13 @@ export default function BookPage() {
       setFinalStatus(detail.book?.final_review_notes_status ?? 'no');
       setFinalNotes(detail.book?.final_review_notes ?? '');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load book');
+      const msg = e instanceof Error ? e.message : 'Failed to load book';
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
-  }, [bookId]);
+  }, [bookId, toast]);
 
   useEffect(() => {
     setLoading(true);
@@ -45,12 +49,12 @@ export default function BookPage() {
   async function approveChapter(chapterId) {
     if (!bookId) return;
     setBusy(`approve-${chapterId}`);
-    setError(null);
     try {
       await api(`/books/${bookId}/chapters/${chapterId}/approve`, { method: 'POST' });
       await load();
+      toast.success('Chapter approved');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Approve failed');
+      toast.error(e instanceof Error ? e.message : 'Approve failed');
     } finally {
       setBusy(null);
     }
@@ -60,7 +64,6 @@ export default function BookPage() {
     e.preventDefault();
     if (!bookId) return;
     setBusy('final');
-    setError(null);
     try {
       await api(`/books/${bookId}/final-review`, {
         method: 'POST',
@@ -70,8 +73,9 @@ export default function BookPage() {
         },
       });
       await load();
+      toast.success('Final review saved');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      toast.error(e instanceof Error ? e.message : 'Save failed');
     } finally {
       setBusy(null);
     }
@@ -80,12 +84,12 @@ export default function BookPage() {
   async function trigger(kind) {
     if (!bookId) return;
     setBusy(`trigger-${kind}`);
-    setError(null);
     try {
-      await api(`/trigger/${kind}`, { method: 'POST', body: { bookId } });
+      const data = await api(`/trigger/${kind}`, { method: 'POST', body: { bookId } });
       await load();
+      toast.success(data?.message ?? 'Job queued');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Trigger failed');
+      toast.error(e instanceof Error ? e.message : 'Trigger failed');
     } finally {
       setBusy(null);
     }
@@ -124,9 +128,30 @@ export default function BookPage() {
         </p>
       </div>
 
-      {error && (
-        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
-          {error}
+      <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-sm">
+        <p className="font-medium text-slate-900">How this pipeline works</p>
+        <ul className="mt-2 list-inside list-disc space-y-1 text-slate-600">
+          <li>
+            <strong>Queue outline</strong> runs the outline job: first-time generation or regeneration when outline
+            notes say so.
+          </li>
+          <li>
+            <strong>Queue chapters</strong> only runs after the outline is approved in your data:{' '}
+            <strong>Outline notes status</strong> must be <code className="rounded bg-slate-100 px-1">no_notes_needed</code>{' '}
+            (set that in Google Sheets, then Sync from the book list). While it is <code className="rounded bg-slate-100 px-1">no</code>, chapter generation stays paused.
+          </li>
+          <li>
+            <strong>Queue compile</strong> runs when every chapter is approved and final review rules pass (see backend
+            state machine).
+          </li>
+        </ul>
+      </div>
+
+      {book.status_outline_notes !== 'no_notes_needed' && (
+        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          Chapters are not generated until <strong>Outline notes status</strong> is{' '}
+          <code className="rounded bg-amber-100 px-1">no_notes_needed</code>. Update that column in your sheet for this
+          book, click <strong>Sync from sheet</strong> on the home page, then queue chapters again.
         </div>
       )}
 
