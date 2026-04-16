@@ -17,6 +17,7 @@ async function compileBook(bookId) {
   const gate = evaluateCompileGate(book, chapters);
 
   if (!gate.canProceed) {
+    logger.info({ bookId, reason: gate.reason }, 'Compile skipped — gate not satisfied');
     await notifyPaused(book.title, 'compilation', gate.reason);
     return;
   }
@@ -38,15 +39,15 @@ async function compileBook(bookId) {
 export async function pollAndEnqueueCompileJobs() {
   const { data: books } = await supabase
     .from('books')
-    .select('id, final_review_notes_status, book_output_status')
+    .select('*')
     .neq('book_output_status', 'done')
-    .neq('book_output_status', 'compiling')
-    .in('final_review_notes_status', ['no_notes_needed', 'yes']);
+    .neq('book_output_status', 'compiling');
 
   for (const book of books ?? []) {
     const chapters = await getChaptersByBookId(book.id);
-    const allApproved = chapters.length > 0 && chapters.every((c) => c.status === 'approved');
-    if (!allApproved) continue;
+    const gate = evaluateCompileGate(book, chapters);
+    if (!gate.canProceed) continue;
+
     await compileQueue.add(
       'compile-book',
       { bookId: book.id },

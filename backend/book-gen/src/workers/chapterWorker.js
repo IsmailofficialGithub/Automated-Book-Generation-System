@@ -4,7 +4,12 @@ import { logger } from '../config/logger.js';
 import { generateChapter, summarizeChapter } from '../core/llmService.js';
 import { canRunChapterGeneration, evaluateChapterGate } from '../core/stateMachine.js';
 import { buildChapterContext, parseChaptersFromOutline } from '../core/contextBuilder.js';
-import { getBooksReadyForChapters, getBookById, logNote } from '../db/booksRepo.js';
+import {
+  getBooksReadyForChapters,
+  getBookById,
+  logNote,
+  syncOutlineFromLatestDraft,
+} from '../db/booksRepo.js';
 import { getChaptersByBookId, createChapter, saveChapterContent } from '../db/chaptersRepo.js';
 import { notifyChapterReady, notifyPaused, notifyError } from '../services/notificationService.js';
 
@@ -29,7 +34,17 @@ async function generateAndSaveChapter(book, chapter, chapterNotes = null, previo
   } catch (err) {
     logger.error({ err, chapterId: chapter.id }, 'Chapter generation failed');
     await notifyError(book.title, `Chapter ${chapter.chapter_number}`, err);
+    throw err;
   }
+}
+
+/** Empty chapter row (e.g. manual DB insert): generate body instead of pausing on chapter_notes_status "no". */
+function needsInitialGeneration(chapter) {
+  if (chapter.content?.trim()) return false;
+  if (chapter.chapter_notes_status === 'yes' && !chapter.chapter_notes?.trim()) {
+    return false;
+  }
+  return true;
 }
 
 async function processOneChapter(book, parsed, existingChapters) {
@@ -39,6 +54,15 @@ async function processOneChapter(book, parsed, existingChapters) {
   if (!existing) {
     const chapter = await createChapter(bookId, parsed.number, parsed.title);
     await generateAndSaveChapter(book, chapter);
+    return { stopped: false };
+  }
+
+  if (needsInitialGeneration(existing)) {
+    logger.info(
+      { chapterId: existing.id, chapterNumber: existing.chapter_number },
+      'Chapter has no content yet — generating first draft (skips editor gate until text exists)'
+    );
+    await generateAndSaveChapter(book, existing);
     return { stopped: false };
   }
 
@@ -58,7 +82,7 @@ async function processOneChapter(book, parsed, existingChapters) {
 }
 
 async function processBookChapters(bookId) {
-  const book = await getBookById(bookId);
+  const book = await syncOutlineFromLatestDraft(bookId);
   const gate = canRunChapterGeneration(book, {
     allowWithoutOutlineApproval: env.ALLOW_CHAPTERS_WITHOUT_OUTLINE_APPROVAL,
   });
@@ -68,7 +92,17 @@ async function processBookChapters(bookId) {
   }
 
   const parsedChapters = parseChaptersFromOutline(book.outline);
-  if (!parsedChapters.length) return;
+  if (!parsedChapters.length) {
+    logger.warn(
+      {
+        bookId,
+        outlineLen: book.outline?.length ?? 0,
+        outlinePreview: (book.outline ?? '').slice(0, 400),
+      },
+      'No chapters parsed from books.outline — use lines like "1. Title" or "Chapter 1: Title" (see parseChaptersFromOutline). Nothing written to chapters table.'
+    );
+    return;
+  }
 
   const existingChapters = await getChaptersByBookId(bookId);
 
@@ -80,20 +114,35 @@ async function processBookChapters(bookId) {
 
 /** Generate (or regenerate) exactly one chapter by number from the book outline. */
 export async function processSingleChapter(bookId, chapterNumber) {
-  const book = await getBookById(bookId);
+  const chapterNum = Number.parseInt(String(chapterNumber), 10);
+  if (!Number.isFinite(chapterNum) || chapterNum < 1) {
+    throw new Error(`Invalid chapterNumber: ${chapterNumber}`);
+  }
+
+  const book = await syncOutlineFromLatestDraft(bookId);
   const gate = canRunChapterGeneration(book, {
     allowWithoutOutlineApproval: env.ALLOW_CHAPTERS_WITHOUT_OUTLINE_APPROVAL,
   });
   if (!gate.canProceed) {
-    logger.info({ bookId, chapterNumber, reason: gate.reason }, 'Single chapter: blocked before chapter generation');
-    return;
+    const msg = `Chapter generation blocked: ${gate.reason}`;
+    logger.warn({ bookId, chapterNumber: chapterNum, reason: gate.reason }, msg);
+    throw new Error(msg);
   }
 
   const parsedChapters = parseChaptersFromOutline(book.outline);
-  const parsed = parsedChapters.find((p) => p.number === chapterNumber);
+  if (!parsedChapters.length) {
+    logger.warn(
+      { bookId, chapterNumber: chapterNum, outlinePreview: (book.outline ?? '').slice(0, 400) },
+      'parseChaptersFromOutline returned 0 chapters — fix outline format or book.outline in Supabase'
+    );
+    throw new Error(
+      'No chapters could be parsed from outline. Use lines like "1. Introduction" or "Chapter 1: Introduction".'
+    );
+  }
+  const parsed = parsedChapters.find((p) => p.number === chapterNum);
   if (!parsed) {
     throw new Error(
-      `Chapter ${chapterNumber} not found in outline (parse chapter lines like "1. Title" or "Chapter 1: Title").`
+      `Chapter ${chapterNum} not in parsed outline (found chapters: ${parsedChapters.map((c) => c.number).join(', ')}). Add a line like "${chapterNum}. Your title" to books.outline.`
     );
   }
 

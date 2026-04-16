@@ -16,6 +16,22 @@ function sheetTabRange(tabName, rangeWithoutTab) {
   return `'${escaped}'!${rangeWithoutTab}`;
 }
 
+const OUTLINE_STATUS_VALUES = ['yes', 'no', 'no_notes_needed'];
+
+/**
+ * Map sheet text to DB enum. Empty/whitespace → null (caller keeps existing DB value on update).
+ * Accepts e.g. "No Notes Needed", "no_notes_needed".
+ */
+export function normalizeOutlineStatusFromSheet(raw) {
+  if (raw == null) return null;
+  const t = String(raw).trim();
+  if (!t) return null;
+  const s = t.toLowerCase().replace(/\s+/g, '_');
+  if (OUTLINE_STATUS_VALUES.includes(s)) return s;
+  logger.warn({ raw }, 'Sheet status_outline_notes not recognized (use yes | no | no_notes_needed); keeping DB value on update');
+  return null;
+}
+
 function getSheetsClient() {
   const auth = new google.auth.GoogleAuth({
     credentials: {
@@ -70,7 +86,7 @@ export async function syncSheetToDatabase(supabase) {
       const { error: insertErr } = await supabase.from('books').insert({
         title: sheetBook.title,
         notes_on_outline_before: sheetBook.notes_on_outline_before,
-        status_outline_notes: sheetBook.status_outline_notes ?? 'no',
+        status_outline_notes: normalizeOutlineStatusFromSheet(sheetBook.status_outline_notes) ?? 'no',
         notes_on_outline_after: sheetBook.notes_on_outline_after,
         final_review_notes_status: sheetBook.final_review_notes_status ?? 'no',
         final_review_notes: sheetBook.final_review_notes,
@@ -80,12 +96,14 @@ export async function syncSheetToDatabase(supabase) {
     } else {
       // Do not sync final_review_* from the sheet on update — those are edited via the API (or set on insert).
       // Otherwise every sync/poll overwrites values saved in the Book Studio UI.
+      const outlineStatus = normalizeOutlineStatusFromSheet(sheetBook.status_outline_notes);
       const { error: updateErr } = await supabase
         .from('books')
         .update({
           notes_on_outline_before: sheetBook.notes_on_outline_before,
           notes_on_outline_after: sheetBook.notes_on_outline_after,
-          status_outline_notes: sheetBook.status_outline_notes ?? existing.status_outline_notes,
+          // Empty/missing sheet cell → keep Supabase value (manual no_notes_needed is not wiped each poll).
+          status_outline_notes: outlineStatus !== null ? outlineStatus : existing.status_outline_notes,
         })
         .eq('id', existing.id);
       if (updateErr) throw new Error(`sync update book "${sheetBook.title}": ${updateErr.message}`);

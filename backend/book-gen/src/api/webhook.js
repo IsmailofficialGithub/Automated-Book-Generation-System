@@ -145,7 +145,11 @@ app.post('/trigger/chapter', async (req, reply) => {
     { bookId, chapterNumber },
     { jobId: `chapter-${bookId}-${chapterNumber}`, removeOnComplete: true }
   );
-  return reply.send({ success: true, message: `Chapter ${chapterNumber} job queued` });
+  return reply.send({
+    success: true,
+    message: `Chapter ${chapterNumber} job queued`,
+    note: 'Runs in the background. If no row appears, check server logs for Chapter job failed (outline empty, gate, or chapter not listed in books.outline).',
+  });
 });
 
 app.post('/trigger/compile', async (req, reply) => {

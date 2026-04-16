@@ -1,4 +1,5 @@
 import { env } from '../config/env.js';
+import { logger } from '../config/logger.js';
 import { canRunChapterGeneration } from '../core/stateMachine.js';
 import { supabase } from './supabaseClient.js';
 
@@ -22,13 +23,55 @@ export async function getBooksReadyForOutline() {
   return data ?? [];
 }
 
-export async function getBooksReadyForChapters() {
+/** Latest draft row content for a book (by version desc). */
+export async function getLatestOutlineDraftContent(bookId) {
   const { data, error } = await supabase
+    .from('outline_drafts')
+    .select('content')
+    .eq('book_id', bookId)
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getLatestOutlineDraftContent failed: ${error.message}`);
+  return data?.content ?? null;
+}
+
+/**
+ * If `books.outline` is empty but `outline_drafts` has content, copy latest draft into `books.outline`.
+ * Chapter generation only reads `books.outline`; drafts alone are not enough until synced.
+ */
+export async function syncOutlineFromLatestDraft(bookId) {
+  const book = await getBookById(bookId);
+  if (book.outline?.trim()) return book;
+  const draft = await getLatestOutlineDraftContent(bookId);
+  if (!draft?.trim()) return book;
+  const { error } = await supabase.from('books').update({ outline: draft }).eq('id', bookId);
+  if (error) throw new Error(`syncOutlineFromLatestDraft failed: ${error.message}`);
+  logger.info({ bookId }, 'books.outline was empty — copied latest outline_drafts.content into books.outline');
+  return getBookById(bookId);
+}
+
+export async function getBooksReadyForChapters() {
+  const { data: withOutline, error } = await supabase
     .from('books')
     .select('*')
     .not('outline', 'is', null);
   if (error) throw new Error(`getBooksReadyForChapters failed: ${error.message}`);
-  const books = data ?? [];
+
+  const { data: draftRows } = await supabase.from('outline_drafts').select('book_id');
+  const draftBookIds = [...new Set((draftRows ?? []).map((r) => r.book_id))];
+  const withOutlineIds = new Set((withOutline ?? []).map((b) => b.id));
+
+  const books = [...(withOutline ?? [])];
+  for (const bid of draftBookIds) {
+    if (withOutlineIds.has(bid)) continue;
+    const book = await getBookById(bid);
+    const draft = await getLatestOutlineDraftContent(bid);
+    if (draft?.trim()) {
+      books.push({ ...book, outline: draft });
+    }
+  }
+
   const allow = env.ALLOW_CHAPTERS_WITHOUT_OUTLINE_APPROVAL;
   return books.filter((b) =>
     canRunChapterGeneration(b, { allowWithoutOutlineApproval: allow }).canProceed

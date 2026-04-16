@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useToast } from '../context/ToastContext.jsx';
 import { Skeleton } from '../components/ui/Skeleton.jsx';
@@ -13,6 +13,9 @@ const btnPrimary =
   'rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-violet-950/40 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 disabled:opacity-50';
 const inputClass =
   'mt-1 block w-full rounded-xl border border-slate-600 bg-slate-800/80 px-3 py-2.5 text-sm text-slate-100 shadow-inner transition placeholder:text-slate-500 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25';
+
+/** Poll interval while book page is open (ms). */
+const LIVE_POLL_MS = 5000;
 
 function chapterStatusClass(status) {
   const s = String(status || '').toLowerCase();
@@ -55,37 +58,69 @@ export default function BookPage() {
   const [finalNotes, setFinalNotes] = useState('');
   /** Selected chapter # for single-chapter queue (string for select value). */
   const [singleChapterPick, setSingleChapterPick] = useState('');
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  /** Avoid overwriting final review fields while user is editing (async poll). */
+  const finalFormFocusedRef = useRef(false);
 
-  const load = useCallback(async () => {
-    if (!bookId) return;
-    setError(null);
-    try {
-      const [h, detail] = await Promise.all([api('/health'), api(`/books/${bookId}`)]);
-      setHealth(h);
-      setBook(detail.book);
-      setChapters(detail.chapters ?? []);
-      setFinalStatus(detail.book?.final_review_notes_status ?? 'no');
-      setFinalNotes(detail.book?.final_review_notes ?? '');
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to load book';
-      setError(msg);
-      toast.error(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, [bookId, toast]);
+  const load = useCallback(
+    async (opts = {}) => {
+      const silent = opts.silent === true;
+      if (!bookId) return;
+      if (!silent) {
+        setError(null);
+        setLoading(true);
+      }
+      try {
+        const [h, detail] = await Promise.all([api('/health'), api(`/books/${bookId}`)]);
+        setHealth(h);
+        setBook(detail.book);
+        setChapters(detail.chapters ?? []);
+        if (!finalFormFocusedRef.current) {
+          setFinalStatus(detail.book?.final_review_notes_status ?? 'no');
+          setFinalNotes(detail.book?.final_review_notes ?? '');
+        }
+        setLastSyncedAt(new Date());
+      } catch (e) {
+        if (!silent) {
+          const msg = e instanceof Error ? e.message : 'Failed to load book';
+          setError(msg);
+          toast.error(msg);
+        }
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [bookId, toast]
+  );
 
   useEffect(() => {
-    setLoading(true);
-    load();
+    load({ silent: false });
   }, [load]);
+
+  useEffect(() => {
+    if (!bookId) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      load({ silent: true });
+    }, LIVE_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [bookId, load]);
+
+  useEffect(() => {
+    if (!bookId) return;
+    const onVis = () => {
+      if (document.visibilityState === 'visible') load({ silent: true });
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [bookId, load]);
 
   async function approveChapter(chapterId) {
     if (!bookId) return;
     setBusy(`approve-${chapterId}`);
     try {
       await api(`/books/${bookId}/chapters/${chapterId}/approve`, { method: 'POST' });
-      await load();
+      await load({ silent: true });
       toast.success('Chapter approved');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Approve failed');
@@ -106,7 +141,7 @@ export default function BookPage() {
           notes: finalNotes.trim() ? finalNotes.trim() : null,
         },
       });
-      await load();
+      await load({ silent: true });
       toast.success('Final review saved');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Save failed');
@@ -120,7 +155,7 @@ export default function BookPage() {
     setBusy(`trigger-${kind}`);
     try {
       const data = await api(`/trigger/${kind}`, { method: 'POST', body: { bookId } });
-      await load();
+      await load({ silent: true });
       toast.success(data?.message ?? 'Job queued');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Trigger failed');
@@ -137,7 +172,7 @@ export default function BookPage() {
         method: 'POST',
         body: { bookId, chapterNumber },
       });
-      await load();
+      await load({ silent: true });
       toast.success(data?.message ?? `Chapter ${chapterNumber} queued`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to queue chapter');
@@ -200,10 +235,23 @@ export default function BookPage() {
           All books
         </Link>
         <h1 className="mt-4 text-pretty text-3xl font-semibold tracking-tight text-slate-50 sm:text-4xl">{book.title}</h1>
-        <p className="mt-2 text-sm text-slate-400">
-          Output status:{' '}
-          <span className="font-semibold text-slate-100">{book.book_output_status ?? '—'}</span>
-        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-400">
+          <span>
+            Output:{' '}
+            <span className="font-semibold text-slate-100">{book.book_output_status ?? '—'}</span>
+          </span>
+          <span className="inline-flex items-center gap-2 text-xs text-slate-500">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-800/80 px-2 py-0.5 ring-1 ring-slate-600/80">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(52,211,153,0.6)]" aria-hidden />
+              Live refresh
+            </span>
+            {lastSyncedAt && (
+              <time dateTime={lastSyncedAt.toISOString()} title={lastSyncedAt.toISOString()}>
+                {lastSyncedAt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </time>
+            )}
+          </span>
+        </div>
       </div>
 
       <div className={`${section} text-sm leading-relaxed text-slate-400`}>
@@ -502,8 +550,17 @@ export default function BookPage() {
         )}
       </section>
 
-      <section className={`${section} mb-0`}>
+      <section
+        className={`${section} mb-0`}
+        onFocusCapture={() => {
+          finalFormFocusedRef.current = true;
+        }}
+        onBlurCapture={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) finalFormFocusedRef.current = false;
+        }}
+      >
         <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Final review</h2>
+        <p className="mt-1 text-xs text-slate-500">Refreshes every {LIVE_POLL_MS / 1000}s while this page is open. Editing here pauses overwriting your draft from the server.</p>
         <form onSubmit={submitFinalReview} className="mt-5 space-y-5">
           <div>
             <label htmlFor="final-status" className="block text-sm font-medium text-slate-300">

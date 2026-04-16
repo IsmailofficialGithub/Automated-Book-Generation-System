@@ -21,4 +21,11 @@ describe('parseChaptersFromOutline', () => {
     const result = parseChaptersFromOutline('This is just a description with no chapters.');
     expect(result).toHaveLength(0);
   });
+
+  it('parses markdown header lines', () => {
+    const outline = '## Chapter 1: Intro\nSome text\n### 2. Next part';
+    const chapters = parseChaptersFromOutline(outline);
+    expect(chapters.length).toBeGreaterThanOrEqual(1);
+    expect(chapters[0].number).toBe(1);
+  });
 });
