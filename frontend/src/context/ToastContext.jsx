@@ -3,9 +3,10 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 const ToastContext = createContext(null);
 
 const VARIANT_STYLES = {
-  success: 'border-emerald-200 bg-emerald-50 text-emerald-950',
-  error: 'border-red-200 bg-red-50 text-red-950',
-  info: 'border-slate-200 bg-white text-slate-900 shadow-md',
+  success:
+    'border-emerald-800/80 bg-emerald-950/95 text-emerald-100 shadow-[0_8px_32px_rgba(6,78,59,0.35)]',
+  error: 'border-red-900/80 bg-red-950/95 text-red-100 shadow-[0_8px_32px_rgba(127,29,29,0.3)]',
+  info: 'border-slate-700/90 bg-slate-900/95 text-slate-100 shadow-[0_8px_32px_rgba(15,23,42,0.5)]',
 };
 
 function makeId() {
@@ -53,14 +54,14 @@ export function ToastProvider({ children }) {
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`pointer-events-auto flex items-start gap-3 rounded-lg border px-4 py-3 text-sm shadow-lg ${VARIANT_STYLES[t.variant] ?? VARIANT_STYLES.info}`}
+            className={`pointer-events-auto flex items-start gap-3 rounded-2xl border px-4 py-3.5 text-sm leading-snug ${VARIANT_STYLES[t.variant] ?? VARIANT_STYLES.info}`}
             role="status"
           >
             <span className="min-w-0 flex-1 leading-snug">{t.message}</span>
             <button
               type="button"
               onClick={() => dismiss(t.id)}
-              className="shrink-0 rounded p-0.5 text-current opacity-60 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
+              className="shrink-0 rounded p-0.5 text-current opacity-70 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-violet-400/50"
               aria-label="Dismiss"
             >
               ×

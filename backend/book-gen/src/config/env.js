@@ -44,6 +44,11 @@ const schema = z.object({
   PORT: z.coerce.number().default(3000),
   POLL_INTERVAL_MS: z.coerce.number().default(15000),
   ENABLE_BACKGROUND_JOBS: booleanFromEnv.default(false),
+  /**
+   * If true, allow chapter jobs when outline exists even if status_outline_notes is still "no".
+   * If false, require status_outline_notes=no_notes_needed (strict editor review).
+   */
+  ALLOW_CHAPTERS_WITHOUT_OUTLINE_APPROVAL: booleanFromEnv.default(false),
   /** Comma-separated browser origins allowed for CORS (Vite default: http://localhost:5173) */
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
 });

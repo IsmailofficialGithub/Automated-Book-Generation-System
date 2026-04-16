@@ -1,3 +1,5 @@
+import { env } from '../config/env.js';
+import { canRunChapterGeneration } from '../core/stateMachine.js';
 import { supabase } from './supabaseClient.js';
 
 export async function getBookById(bookId) {
@@ -24,10 +26,13 @@ export async function getBooksReadyForChapters() {
   const { data, error } = await supabase
     .from('books')
     .select('*')
-    .not('outline', 'is', null)
-    .eq('status_outline_notes', 'no_notes_needed');
+    .not('outline', 'is', null);
   if (error) throw new Error(`getBooksReadyForChapters failed: ${error.message}`);
-  return data ?? [];
+  const books = data ?? [];
+  const allow = env.ALLOW_CHAPTERS_WITHOUT_OUTLINE_APPROVAL;
+  return books.filter((b) =>
+    canRunChapterGeneration(b, { allowWithoutOutlineApproval: allow }).canProceed
+  );
 }
 
 export async function saveOutline(bookId, outline, version) {

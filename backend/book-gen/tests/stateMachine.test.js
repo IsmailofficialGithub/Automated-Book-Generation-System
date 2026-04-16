@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   canStartOutline,
   evaluateOutlineGate,
+  canRunChapterGeneration,
   evaluateChapterGate,
   evaluateCompileGate,
 } from '../src/core/stateMachine.js';
@@ -51,6 +52,48 @@ describe('evaluateOutlineGate', () => {
   it('pauses when status is no', () => {
     const result = evaluateOutlineGate({ status_outline_notes: 'no' });
     expect(result.canProceed).toBe(false);
+  });
+});
+
+describe('canRunChapterGeneration', () => {
+  const outline = 'Chapter 1: Intro\nChapter 2: Body';
+
+  it('blocks when outline is empty', () => {
+    const result = canRunChapterGeneration({ outline: '' }, { allowWithoutOutlineApproval: true });
+    expect(result.canProceed).toBe(false);
+  });
+
+  it('allows when no_notes_needed', () => {
+    const result = canRunChapterGeneration(
+      { outline, status_outline_notes: 'no_notes_needed' },
+      { allowWithoutOutlineApproval: false }
+    );
+    expect(result.canProceed).toBe(true);
+  });
+
+  it('blocks status no when approval required', () => {
+    const result = canRunChapterGeneration(
+      { outline, status_outline_notes: 'no' },
+      { allowWithoutOutlineApproval: false }
+    );
+    expect(result.canProceed).toBe(false);
+  });
+
+  it('allows status no when approval not required', () => {
+    const result = canRunChapterGeneration(
+      { outline, status_outline_notes: 'no' },
+      { allowWithoutOutlineApproval: true }
+    );
+    expect(result.canProceed).toBe(true);
+  });
+
+  it('blocks yes with notes awaiting outline regen', () => {
+    const result = canRunChapterGeneration(
+      { outline, status_outline_notes: 'yes', notes_on_outline_after: 'fix ch1' },
+      { allowWithoutOutlineApproval: true }
+    );
+    expect(result.canProceed).toBe(false);
+    expect(result.needsOutlineRegeneration).toBe(true);
   });
 });
 

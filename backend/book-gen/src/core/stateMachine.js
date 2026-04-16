@@ -35,6 +35,45 @@ export function evaluateOutlineGate(book) {
   return { canProceed: false, needsRegeneration: false, reason: 'Outline review status is "no" - paused' };
 }
 
+/**
+ * Whether chapter generation is allowed (outline exists + outline-review rules).
+ * When allowWithoutOutlineApproval is true, status "no" (outline not formally approved) still allows chapters if outline text exists.
+ */
+export function canRunChapterGeneration(book, opts = {}) {
+  const allowWithoutApproval = opts.allowWithoutOutlineApproval === true;
+
+  if (!book.outline?.trim()) {
+    return { canProceed: false, reason: 'Outline is empty — generate outline first' };
+  }
+
+  const status = book.status_outline_notes;
+
+  if (status === STATUS.NO_NOTES_NEEDED) {
+    return { canProceed: true, reason: 'Outline marked no_notes_needed' };
+  }
+
+  if (status === STATUS.YES) {
+    const hasNotes = book.notes_on_outline_after?.trim();
+    if (hasNotes) {
+      return {
+        canProceed: false,
+        needsOutlineRegeneration: true,
+        reason: 'notes_on_outline_after set — regenerate outline before chapters',
+      };
+    }
+    return { canProceed: false, reason: 'Waiting for notes_on_outline_after' };
+  }
+
+  if (allowWithoutApproval) {
+    return { canProceed: true, reason: 'Outline present; chapters allowed without formal approval' };
+  }
+
+  return {
+    canProceed: false,
+    reason: 'Set status_outline_notes to no_notes_needed in sheet/DB, or set ALLOW_CHAPTERS_WITHOUT_OUTLINE_APPROVAL=true',
+  };
+}
+
 export function evaluateChapterGate(chapter) {
   const status = chapter.chapter_notes_status;
 

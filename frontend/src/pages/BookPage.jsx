@@ -1,13 +1,45 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useToast } from '../context/ToastContext.jsx';
+import { Skeleton } from '../components/ui/Skeleton.jsx';
 import { api } from '../lib/api.js';
+import { parseChaptersFromOutline } from '../lib/outline.js';
+
+const section =
+  'mb-8 rounded-2xl border border-slate-700/80 bg-slate-900/45 p-5 shadow-[0_1px_3px_rgba(0,0,0,0.4)] ring-1 ring-white/4 sm:p-6';
+const btnSecondary =
+  'rounded-xl border border-slate-600 bg-slate-800/80 px-4 py-2.5 text-sm font-medium text-slate-100 shadow-sm transition hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-45';
+const btnPrimary =
+  'rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-violet-950/40 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50 disabled:opacity-50';
+const inputClass =
+  'mt-1 block w-full rounded-xl border border-slate-600 bg-slate-800/80 px-3 py-2.5 text-sm text-slate-100 shadow-inner transition placeholder:text-slate-500 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25';
 
 function chapterStatusClass(status) {
   const s = String(status || '').toLowerCase();
-  if (s === 'approved') return 'bg-emerald-50 text-emerald-800 ring-emerald-200';
-  if (s === 'draft') return 'bg-sky-50 text-sky-900 ring-sky-200';
-  return 'bg-slate-100 text-slate-600 ring-slate-200';
+  if (s === 'approved') return 'bg-emerald-950/80 text-emerald-300 ring-emerald-700/50';
+  if (s === 'draft') return 'bg-sky-950/80 text-sky-300 ring-sky-700/50';
+  return 'bg-slate-800 text-slate-400 ring-slate-600/80';
+}
+
+function BookDetailSkeleton() {
+  return (
+    <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
+      <Skeleton className="h-4 w-32" />
+      <Skeleton className="mt-6 h-10 w-4/5 max-w-lg" />
+      <Skeleton className="mt-3 h-4 w-40" />
+      <div className="mt-10 space-y-8">
+        <div className={`${section} space-y-3`}>
+          <Skeleton className="h-5 w-full max-w-md" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-5/6" />
+        </div>
+        <div className={`${section}`}>
+          <Skeleton className="h-5 w-28" />
+          <Skeleton className="mt-4 h-10 w-40" />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function BookPage() {
@@ -21,6 +53,8 @@ export default function BookPage() {
   const [busy, setBusy] = useState(null);
   const [finalStatus, setFinalStatus] = useState('no');
   const [finalNotes, setFinalNotes] = useState('');
+  /** Selected chapter # for single-chapter queue (string for select value). */
+  const [singleChapterPick, setSingleChapterPick] = useState('');
 
   const load = useCallback(async () => {
     if (!bookId) return;
@@ -95,79 +129,132 @@ export default function BookPage() {
     }
   }
 
+  async function triggerSingleChapter(chapterNumber) {
+    if (!bookId || !Number.isFinite(chapterNumber)) return;
+    setBusy(`chapter-${chapterNumber}`);
+    try {
+      const data = await api('/trigger/chapter', {
+        method: 'POST',
+        body: { bookId, chapterNumber },
+      });
+      await load();
+      toast.success(data?.message ?? `Chapter ${chapterNumber} queued`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to queue chapter');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const jobsOn = health?.backgroundJobs;
 
+  const outlineChapters = useMemo(() => parseChaptersFromOutline(book?.outline), [book?.outline]);
+  const existingChapterNumbers = useMemo(() => new Set(chapters.map((c) => c.chapter_number)), [chapters]);
+  const missingFromDb = useMemo(
+    () => outlineChapters.filter((p) => !existingChapterNumbers.has(p.number)),
+    [outlineChapters, existingChapterNumbers]
+  );
+
+  useEffect(() => {
+    if (!outlineChapters.length) {
+      setSingleChapterPick('');
+      return;
+    }
+    setSingleChapterPick((prev) => {
+      if (prev && outlineChapters.some((c) => String(c.number) === prev)) return prev;
+      return String(outlineChapters[0].number);
+    });
+  }, [outlineChapters]);
+
   if (loading && !book) {
-    return (
-      <div className="mx-auto max-w-4xl px-4 py-10 text-slate-500">
-        <p>Loading…</p>
-      </div>
-    );
+    return <BookDetailSkeleton />;
   }
 
   if (!book) {
     return (
-      <div className="mx-auto max-w-4xl px-4 py-10">
-        <p className="text-red-700">{error || 'Book not found.'}</p>
-        <Link to="/" className="mt-4 inline-block text-sm font-medium text-violet-700 hover:text-violet-900">
-          ← Back to books
-        </Link>
+      <div className="mx-auto max-w-lg px-4 py-16 sm:px-6">
+        <div className="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-8 text-center ring-1 ring-white/4">
+          <p className="text-lg font-medium text-slate-100">{error || 'Book not found'}</p>
+          <p className="mt-2 text-sm text-slate-500">Check the link or sync from your sheet again.</p>
+          <Link
+            to="/"
+            className="mt-6 inline-flex rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-violet-950/40 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50"
+          >
+            Back to books
+          </Link>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link to="/" className="text-sm font-medium text-violet-700 hover:text-violet-900">
-          ← All books
+    <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-12">
+      <div className="mb-10">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1 text-sm font-medium text-violet-400 transition hover:text-violet-300 focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+        >
+          <span aria-hidden className="text-base leading-none">
+            ←
+          </span>
+          All books
         </Link>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{book.title}</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Output: <span className="font-medium text-slate-700">{book.book_output_status ?? '—'}</span>
+        <h1 className="mt-4 text-pretty text-3xl font-semibold tracking-tight text-slate-50 sm:text-4xl">{book.title}</h1>
+        <p className="mt-2 text-sm text-slate-400">
+          Output status:{' '}
+          <span className="font-semibold text-slate-100">{book.book_output_status ?? '—'}</span>
         </p>
       </div>
 
-      <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-sm">
-        <p className="font-medium text-slate-900">How this pipeline works</p>
-        <ul className="mt-2 list-inside list-disc space-y-1 text-slate-600">
+      <div className={`${section} text-sm leading-relaxed text-slate-400`}>
+        <p className="font-semibold text-slate-100">How this pipeline works</p>
+        <ul className="mt-3 list-inside list-disc space-y-2 marker:text-violet-500/80">
           <li>
-            <strong>Queue outline</strong> runs the outline job: first-time generation or regeneration when outline
-            notes say so.
+            <strong className="font-medium text-slate-200">Queue outline</strong> — generates or regenerates the outline
+            from your notes.
           </li>
           <li>
-            <strong>Queue chapters</strong> only runs after the outline is approved in your data:{' '}
-            <strong>Outline notes status</strong> must be <code className="rounded bg-slate-100 px-1">no_notes_needed</code>{' '}
-            (set that in Google Sheets, then Sync from the book list). While it is <code className="rounded bg-slate-100 px-1">no</code>, chapter generation stays paused.
+            <strong className="font-medium text-slate-200">Queue chapters</strong> — runs only when{' '}
+            <strong className="font-medium text-slate-200">Outline notes status</strong> is{' '}
+            <code className="rounded-md bg-slate-800 px-1.5 py-0.5 text-xs text-violet-200 ring-1 ring-slate-600/80">
+              no_notes_needed
+            </code>{' '}
+            (set in Sheets, then sync).
           </li>
           <li>
-            <strong>Queue compile</strong> runs when every chapter is approved and final review rules pass (see backend
-            state machine).
+            <strong className="font-medium text-slate-200">Queue compile</strong> — builds files when chapters are
+            approved and final review rules pass.
+          </li>
+          <li>
+            <strong className="font-medium text-slate-200">One chapter</strong> — queue a single chapter by number
+            (matches lines in your outline like <code className="text-xs">1. Chapter title</code>).
           </li>
         </ul>
       </div>
 
       {book.status_outline_notes !== 'no_notes_needed' && (
-        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-          Chapters are not generated until <strong>Outline notes status</strong> is{' '}
-          <code className="rounded bg-amber-100 px-1">no_notes_needed</code>. Update that column in your sheet for this
-          book, click <strong>Sync from sheet</strong> on the home page, then queue chapters again.
+        <div className="mb-8 rounded-2xl border border-amber-600/40 bg-amber-950/40 px-5 py-4 text-sm leading-relaxed text-amber-100 ring-1 ring-amber-500/20">
+          Chapters wait until <strong>Outline notes status</strong> is{' '}
+          <code className="rounded-md bg-amber-950/80 px-1.5 py-0.5 text-xs text-amber-200 ring-1 ring-amber-700/50">
+            no_notes_needed
+          </code>
+          . Update the sheet, sync from the home page, then queue chapters again.
         </div>
       )}
 
       {(book.output_url_docx || book.output_url_pdf || book.output_url_txt) && (
-        <section className="mb-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Downloads</h2>
-          <ul className="mt-3 flex flex-wrap gap-3">
+        <section className={section}>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Downloads</h2>
+          <ul className="mt-4 flex flex-wrap gap-3">
             {book.output_url_docx && (
               <li>
                 <a
                   href={book.output_url_docx}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-sm font-medium text-violet-700 underline-offset-2 hover:underline"
+                  className="inline-flex rounded-xl border border-violet-500/35 bg-violet-950/50 px-4 py-2 text-sm font-medium text-violet-200 transition hover:bg-violet-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
                 >
-                  DOCX
+                  Open DOCX
                 </a>
               </li>
             )}
@@ -177,9 +264,9 @@ export default function BookPage() {
                   href={book.output_url_pdf}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-sm font-medium text-violet-700 underline-offset-2 hover:underline"
+                  className="inline-flex rounded-xl border border-violet-500/35 bg-violet-950/50 px-4 py-2 text-sm font-medium text-violet-200 transition hover:bg-violet-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
                 >
-                  PDF
+                  Open PDF
                 </a>
               </li>
             )}
@@ -189,9 +276,9 @@ export default function BookPage() {
                   href={book.output_url_txt}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-sm font-medium text-violet-700 underline-offset-2 hover:underline"
+                  className="inline-flex rounded-xl border border-violet-500/35 bg-violet-950/50 px-4 py-2 text-sm font-medium text-violet-200 transition hover:bg-violet-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
                 >
-                  TXT
+                  Open TXT
                 </a>
               </li>
             )}
@@ -199,17 +286,21 @@ export default function BookPage() {
         </section>
       )}
 
-      <section className="mb-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Pipeline</h2>
-        <p className="mt-2 text-sm text-slate-600">
-          Manual triggers enqueue work in Redis. They are only available when the server runs with background jobs.
+      <section className={section}>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Pipeline</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-400">
+          Manual jobs need Redis and{' '}
+          <code className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-300 ring-1 ring-slate-600/80">
+            ENABLE_BACKGROUND_JOBS=true
+          </code>
+          .
         </p>
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-5 flex flex-wrap gap-2">
           <button
             type="button"
             disabled={!jobsOn || busy}
             onClick={() => trigger('outline')}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className={btnSecondary}
           >
             {busy === 'trigger-outline' ? 'Queuing…' : 'Queue outline'}
           </button>
@@ -217,7 +308,7 @@ export default function BookPage() {
             type="button"
             disabled={!jobsOn || busy}
             onClick={() => trigger('chapters')}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className={btnSecondary}
           >
             {busy === 'trigger-chapters' ? 'Queuing…' : 'Queue chapters'}
           </button>
@@ -225,114 +316,204 @@ export default function BookPage() {
             type="button"
             disabled={!jobsOn || busy}
             onClick={() => trigger('compile')}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className={btnSecondary}
           >
             {busy === 'trigger-compile' ? 'Queuing…' : 'Queue compile'}
           </button>
         </div>
         {!jobsOn && (
-          <p className="mt-3 text-xs text-amber-800">
-            Set <code className="rounded bg-amber-100 px-1">ENABLE_BACKGROUND_JOBS=true</code> and run Redis to
-            enable triggers.
+          <p className="mt-4 text-xs leading-relaxed text-amber-200/90">
+            Pipeline triggers are off. Enable background jobs and Redis to use these buttons.
           </p>
         )}
       </section>
 
-      <section className="mb-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Outline workflow</h2>
-        <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+      <section className={section}>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Outline workflow</h2>
+        <dl className="mt-4 grid gap-4 text-sm">
           <div>
             <dt className="text-slate-500">Outline notes status</dt>
-            <dd className="font-medium text-slate-900">{book.status_outline_notes ?? '—'}</dd>
+            <dd className="mt-1 font-semibold text-slate-100">{book.status_outline_notes ?? '—'}</dd>
           </div>
-          <div className="sm:col-span-2">
+          <div>
             <dt className="text-slate-500">Notes before outline</dt>
-            <dd className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-slate-800">
+            <dd className="mt-2 whitespace-pre-wrap rounded-xl bg-slate-950/50 p-4 text-slate-300 ring-1 ring-slate-700/80">
               {book.notes_on_outline_before || '—'}
             </dd>
           </div>
-          <div className="sm:col-span-2">
+          <div>
             <dt className="text-slate-500">Notes after outline</dt>
-            <dd className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-slate-800">
+            <dd className="mt-2 whitespace-pre-wrap rounded-xl bg-slate-950/50 p-4 text-slate-300 ring-1 ring-slate-700/80">
               {book.notes_on_outline_after || '—'}
             </dd>
           </div>
         </dl>
         {book.outline && (
-          <div className="mt-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Current outline</h3>
-            <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-slate-900/5 p-4 text-xs leading-relaxed text-slate-800">
+          <div className="mt-6">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Current outline</h3>
+            <pre className="mt-3 max-h-80 overflow-auto rounded-xl bg-black/30 p-4 text-xs leading-relaxed text-slate-300 ring-1 ring-slate-700/80">
               {book.outline}
             </pre>
           </div>
         )}
       </section>
 
-      <section className="mb-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Chapters</h2>
+      <section className={section}>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Chapters</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-500">
+          Generate one chapter at a time, or approve drafts when you are ready. Outline must list each chapter (e.g.{' '}
+          <code className="rounded bg-slate-800 px-1 text-xs text-slate-300">1. Introduction</code>).
+        </p>
+
+        {outlineChapters.length > 0 && jobsOn && (
+          <div className="mt-5 flex flex-col gap-3 rounded-xl bg-slate-950/50 p-4 ring-1 ring-slate-700/80 sm:flex-row sm:items-end sm:gap-4">
+            <div className="min-w-0 flex-1">
+              <label htmlFor="single-chapter" className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+                Generate one chapter
+              </label>
+              <select
+                id="single-chapter"
+                value={singleChapterPick}
+                onChange={(e) => setSingleChapterPick(e.target.value)}
+                className={`${inputClass} mt-1.5 max-w-full sm:max-w-md`}
+              >
+                {outlineChapters.map((c) => (
+                  <option key={c.number} value={String(c.number)}>
+                    {c.number}. {c.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              disabled={!singleChapterPick || !!busy}
+              onClick={() => triggerSingleChapter(Number(singleChapterPick))}
+              className="shrink-0 rounded-xl border border-violet-500/40 bg-violet-950/50 px-4 py-2.5 text-sm font-medium text-violet-200 transition hover:bg-violet-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {busy === `chapter-${singleChapterPick}` ? 'Queuing…' : 'Queue this chapter'}
+            </button>
+          </div>
+        )}
+
+        {outlineChapters.length > 0 && !jobsOn && (
+          <p className="mt-4 text-xs leading-relaxed text-slate-500">
+            Turn on background jobs and Redis to use single-chapter generation.
+          </p>
+        )}
+
+        {outlineChapters.length === 0 && book?.outline && (
+          <p className="mt-4 rounded-lg bg-amber-950/30 px-3 py-2 text-xs text-amber-200/90 ring-1 ring-amber-800/40">
+            No chapters parsed from the outline. Use lines like <code className="text-amber-100">1. Your title</code> or{' '}
+            <code className="text-amber-100">Chapter 1: Your title</code>.
+          </p>
+        )}
+
+        {missingFromDb.length > 0 && (
+          <div className="mt-5 rounded-xl border border-slate-700/80 bg-slate-950/40 p-4">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">In outline, not generated yet</p>
+            <ul className="mt-3 space-y-2">
+              {missingFromDb.map((m) => (
+                <li
+                  key={m.number}
+                  className="flex flex-wrap items-center justify-between gap-2 gap-y-2 text-sm text-slate-300"
+                >
+                  <span>
+                    <span className="font-medium text-slate-100">{m.number}.</span> {m.title}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={!jobsOn || !!busy}
+                    onClick={() => triggerSingleChapter(m.number)}
+                    className="rounded-lg border border-slate-600 bg-slate-800/90 px-3 py-1 text-xs font-medium text-slate-100 transition hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    {busy === `chapter-${m.number}` ? 'Queuing…' : 'Queue'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {chapters.length === 0 ? (
-          <p className="mt-3 text-sm text-slate-500">No chapters yet.</p>
+          <p className="mt-6 text-sm text-slate-500">
+            No chapter rows in the database yet — use the controls above or <strong className="text-slate-400">Queue chapters</strong> in the pipeline to fill them in order.
+          </p>
         ) : (
-          <div className="mt-4 overflow-x-auto">
+          <div className="mt-6 overflow-x-auto rounded-xl ring-1 ring-slate-700/80">
             <table className="min-w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-slate-500">
-                  <th className="pb-2 pr-4 font-medium">#</th>
-                  <th className="pb-2 pr-4 font-medium">Title</th>
-                  <th className="pb-2 pr-4 font-medium">Status</th>
-                  <th className="pb-2 pr-4 font-medium">Notes</th>
-                  <th className="pb-2 font-medium">Action</th>
+              <thead className="bg-slate-800/90 text-slate-400">
+                <tr>
+                  <th className="px-4 py-3 font-medium">#</th>
+                  <th className="px-4 py-3 font-medium">Title</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Notes</th>
+                  <th className="px-4 py-3 font-medium">Queue</th>
+                  <th className="px-4 py-3 font-medium">Approve</th>
                 </tr>
               </thead>
-              <tbody>
-                {chapters.map((c) => (
-                  <tr key={c.id} className="border-b border-slate-100">
-                    <td className="py-3 pr-4 align-top">{c.chapter_number}</td>
-                    <td className="py-3 pr-4 align-top font-medium text-slate-900">{c.title}</td>
-                    <td className="py-3 pr-4 align-top">
-                      <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${chapterStatusClass(
-                          c.status
-                        )}`}
-                      >
-                        {c.status}
-                      </span>
-                    </td>
-                    <td className="py-3 pr-4 align-top text-slate-600">{c.chapter_notes_status ?? '—'}</td>
-                    <td className="py-3 align-top">
-                      {c.status !== 'approved' ? (
+              <tbody className="divide-y divide-slate-800/90 bg-slate-900/30">
+                {chapters.map((c) => {
+                  const canQueueSingle = jobsOn && c.status !== 'approved';
+                  return (
+                    <tr key={c.id} className="transition hover:bg-slate-800/50">
+                      <td className="px-4 py-3 align-middle text-slate-500">{c.chapter_number}</td>
+                      <td className="px-4 py-3 align-middle font-medium text-slate-100">{c.title}</td>
+                      <td className="px-4 py-3 align-middle">
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${chapterStatusClass(
+                            c.status
+                          )}`}
+                        >
+                          {c.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 align-middle text-slate-400">{c.chapter_notes_status ?? '—'}</td>
+                      <td className="px-4 py-3 align-middle">
                         <button
                           type="button"
-                          disabled={!!busy}
-                          onClick={() => approveChapter(c.id)}
-                          className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                          disabled={!canQueueSingle || !!busy}
+                          title={!jobsOn ? 'Enable background jobs' : c.status === 'approved' ? 'Already approved' : 'Queue this chapter only'}
+                          onClick={() => triggerSingleChapter(c.chapter_number)}
+                          className="rounded-lg border border-slate-600 bg-slate-800/90 px-2.5 py-1 text-xs font-medium text-slate-100 transition hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                          {busy === `approve-${c.id}` ? '…' : 'Approve'}
+                          {busy === `chapter-${c.chapter_number}` ? '…' : 'Queue'}
                         </button>
-                      ) : (
-                        <span className="text-xs text-slate-400">Done</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-4 py-3 align-middle">
+                        {c.status !== 'approved' ? (
+                          <button
+                            type="button"
+                            disabled={!!busy}
+                            onClick={() => approveChapter(c.id)}
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50 disabled:opacity-50"
+                          >
+                            {busy === `approve-${c.id}` ? '…' : 'Approve'}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-slate-500">Done</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Final review</h2>
-        <form onSubmit={submitFinalReview} className="mt-4 space-y-4">
+      <section className={`${section} mb-0`}>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Final review</h2>
+        <form onSubmit={submitFinalReview} className="mt-5 space-y-5">
           <div>
-            <label htmlFor="final-status" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="final-status" className="block text-sm font-medium text-slate-300">
               Status
             </label>
             <select
               id="final-status"
               value={finalStatus}
               onChange={(e) => setFinalStatus(e.target.value)}
-              className="mt-1 block w-full max-w-xs rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+              className={`${inputClass} max-w-xs`}
             >
               <option value="no">no</option>
               <option value="yes">yes</option>
@@ -340,22 +521,12 @@ export default function BookPage() {
             </select>
           </div>
           <div>
-            <label htmlFor="final-notes" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="final-notes" className="block text-sm font-medium text-slate-300">
               Notes (optional)
             </label>
-            <textarea
-              id="final-notes"
-              rows={4}
-              value={finalNotes}
-              onChange={(e) => setFinalNotes(e.target.value)}
-              className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-            />
+            <textarea id="final-notes" rows={4} value={finalNotes} onChange={(e) => setFinalNotes(e.target.value)} className={inputClass} />
           </div>
-          <button
-            type="submit"
-            disabled={busy === 'final'}
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
-          >
+          <button type="submit" disabled={busy === 'final'} className={btnPrimary}>
             {busy === 'final' ? 'Saving…' : 'Save final review'}
           </button>
         </form>

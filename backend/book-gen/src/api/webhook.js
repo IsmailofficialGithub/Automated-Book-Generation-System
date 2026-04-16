@@ -128,6 +128,26 @@ app.post('/trigger/chapters', async (req, reply) => {
   return reply.send({ success: true, message: 'Chapter job queued' });
 });
 
+/** One chapter only (outline must list that chapter number). */
+app.post('/trigger/chapter', async (req, reply) => {
+  if (!env.ENABLE_BACKGROUND_JOBS) return reply.status(503).send(jobsDisabled());
+  const parsed = z
+    .object({
+      bookId: z.string().uuid(),
+      chapterNumber: z.coerce.number().int().positive(),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) return reply.status(400).send({ error: 'Invalid body (need bookId + chapterNumber)' });
+  const { chapterQueue } = await import('../workers/chapterWorker.js');
+  const { bookId, chapterNumber } = parsed.data;
+  await chapterQueue.add(
+    'generate-chapter',
+    { bookId, chapterNumber },
+    { jobId: `chapter-${bookId}-${chapterNumber}`, removeOnComplete: true }
+  );
+  return reply.send({ success: true, message: `Chapter ${chapterNumber} job queued` });
+});
+
 app.post('/trigger/compile', async (req, reply) => {
   if (!env.ENABLE_BACKGROUND_JOBS) return reply.status(503).send(jobsDisabled());
   const parsed = z.object({ bookId: z.string().uuid() }).safeParse(req.body);
